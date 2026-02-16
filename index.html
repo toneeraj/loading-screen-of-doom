@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Quest - 2D Platformer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #0a0a1a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+}
+#gameCanvas {
+    border: 2px solid #333;
+    image-rendering: pixelated;
+    background: #1a1a2e;
+}
+#ui-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+#title-screen, #game-over-screen, #win-screen {
+    display: none;
+    text-align: center;
+    pointer-events: auto;
+}
+#title-screen h1 {
+    color: #ffcc00;
+    font-size: 48px;
+    text-shadow: 3px 3px 0 #ff6600;
+    margin-bottom: 20px;
+}
+#title-screen p, #game-over-screen p, #win-screen p {
+    color: #aaa;
+    font-size: 18px;
+    margin: 10px 0;
+}
+#game-over-screen h1 {
+    color: #ff4444;
+    font-size: 42px;
+    text-shadow: 3px 3px 0 #880000;
+    margin-bottom: 10px;
+}
+#win-screen h1 {
+    color: #44ff44;
+    font-size: 42px;
+    text-shadow: 3px 3px 0 #008800;
+    margin-bottom: 10px;
+}
+.btn {
+    display: inline-block;
+    padding: 12px 30px;
+    margin: 15px 5px;
+    background: #ffcc00;
+    color: #1a1a2e;
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    font-weight: bold;
+    border: none;
+    cursor: pointer;
+    pointer-events: auto;
+    text-transform: uppercase;
+}
+.btn:hover { background: #ffdd44; }
+#mobile-controls {
+    display: none;
+    position: fixed;
+    bottom: 10px;
+    left: 0; right: 0;
+    justify-content: space-between;
+    padding: 0 10px;
+    pointer-events: none;
+    z-index: 10;
+}
+#mobile-controls button {
+    pointer-events: auto;
+    width: 70px;
+    height: 70px;
+    font-size: 28px;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 50%;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+}
+@media (pointer: coarse) {
+    #mobile-controls { display: flex; }
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-overlay">
+    <div id="title-screen">
+        <h1>PIXEL QUEST</h1>
+        <p>Collect coins. Defeat enemies. Reach the flag.</p>
+        <p style="color:#ffcc00; font-size:14px;">Arrow Keys / WASD to move &bull; Space / Up to jump</p>
+        <button class="btn" onclick="game.start()">Play</button>
+    </div>
+    <div id="game-over-screen">
+        <h1>GAME OVER</h1>
+        <p id="go-score"></p>
+        <button class="btn" onclick="game.start()">Retry</button>
+    </div>
+    <div id="win-screen">
+        <h1>YOU WIN!</h1>
+        <p id="win-score"></p>
+        <button class="btn" onclick="game.start()">Play Again</button>
+    </div>
+</div>
+
+<div id="mobile-controls">
+    <div>
+        <button id="btn-left" ontouchstart="mobileInput.left=true" ontouchend="mobileInput.left=false">&larr;</button>
+        <button id="btn-right" ontouchstart="mobileInput.right=true" ontouchend="mobileInput.right=false">&rarr;</button>
+    </div>
+    <div>
+        <button id="btn-jump" ontouchstart="mobileInput.jump=true" ontouchend="mobileInput.jump=false">&uarr;</button>
+    </div>
+</div>
+
+<script>
+// ============================================================
+// PIXEL QUEST - A 2D Platformer
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Responsive canvas sizing
+const BASE_W = 800, BASE_H = 500;
+function resizeCanvas() {
+    const scale = Math.min(window.innerWidth / BASE_W, window.innerHeight / BASE_H, 1.5);
+    canvas.width = BASE_W;
+    canvas.height = BASE_H;
+    canvas.style.width = (BASE_W * scale) + 'px';
+    canvas.style.height = (BASE_H * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ---- Input ----
+const keys = {};
+const mobileInput = { left: false, right: false, jump: false };
+window.addEventListener('keydown', e => { keys[e.code] = true; if(['Space','ArrowUp','ArrowDown'].includes(e.code)) e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function isLeft() { return keys['ArrowLeft'] || keys['KeyA'] || mobileInput.left; }
+function isRight() { return keys['ArrowRight'] || keys['KeyD'] || mobileInput.right; }
+function isJump() { return keys['Space'] || keys['ArrowUp'] || keys['KeyW'] || mobileInput.jump; }
+
+// ---- Audio (tiny synth) ----
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSound(freq, dur, type='square', vol=0.1) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + dur);
+}
+function sfxJump() { playSound(400, 0.15); playSound(600, 0.1); }
+function sfxCoin() { playSound(880, 0.1); setTimeout(() => playSound(1174, 0.15), 80); }
+function sfxHurt() { playSound(150, 0.3, 'sawtooth', 0.15); }
+function sfxStomp() { playSound(300, 0.1); playSound(100, 0.2); }
+function sfxWin() { [523,659,784,1047].forEach((f,i) => setTimeout(() => playSound(f, 0.2, 'square', 0.08), i*120)); }
+
+// ---- Sprite Drawing Helpers ----
+function drawRect(x, y, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x), Math.round(y), w, h);
+}
+
+function drawPlayer(px, py, dir, frame, isDead) {
+    const x = Math.round(px);
+    const y = Math.round(py);
+    if (isDead) {
+        // death pose - red tinted
+        drawRect(x+4, y+2, 16, 12, '#ff4444');
+        drawRect(x+6, y+14, 12, 8, '#ff6666');
+        drawRect(x+4, y+22, 6, 8, '#ff4444');
+        drawRect(x+14, y+22, 6, 8, '#ff4444');
+        // X eyes
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(x+7, y+5, 2, 2);
+        ctx.fillRect(x+13, y+5, 2, 2);
+        return;
+    }
+    // Body
+    drawRect(x+4, y+2, 16, 12, '#4488ff');
+    // Head
+    drawRect(x+6, y-6, 12, 10, '#ffcc88');
+    // Hair
+    drawRect(x+5, y-8, 14, 4, '#884422');
+    // Eyes
+    const ex = dir > 0 ? 2 : -2;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x+8+ex, y-3, 3, 3);
+    ctx.fillRect(x+13+ex, y-3, 3, 3);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x+9+ex, y-2, 2, 2);
+    ctx.fillRect(x+14+ex, y-2, 2, 2);
+    // Legs with animation
+    const legOff = Math.sin(frame * 0.3) * 3;
+    drawRect(x+6, y+14, 5, 10, '#335599');
+    drawRect(x+13, y+14, 5, 10, '#335599');
+    // Shoes
+    drawRect(x+5, y+22 + (legOff > 0 ? legOff : 0), 6, 4, '#553300');
+    drawRect(x+13, y+22 + (legOff < 0 ? -legOff : 0), 6, 4, '#553300');
+    // Cape
+    ctx.fillStyle = 'rgba(255,50,50,0.7)';
+    const capeX = dir > 0 ? x+2 : x+18;
+    ctx.fillRect(capeX - (dir > 0 ? 4 : 0), y+2, 6, 14 + Math.sin(frame*0.2)*2);
+}
+
+function drawEnemy(ex, ey, type, frame) {
+    const x = Math.round(ex);
+    const y = Math.round(ey);
+    if (type === 'slime') {
+        const squish = Math.sin(frame * 0.08) * 2;
+        drawRect(x+2, y+8-squish, 20, 16+squish, '#44cc44');
+        drawRect(x+4, y+4-squish, 16, 6, '#44cc44');
+        // Eyes
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(x+6, y+10-squish, 4, 4);
+        ctx.fillRect(x+14, y+10-squish, 4, 4);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(x+7, y+11-squish, 2, 3);
+        ctx.fillRect(x+15, y+11-squish, 2, 3);
+    } else if (type === 'bat') {
+        const wingOff = Math.sin(frame * 0.15) * 6;
+        // Wings
+        drawRect(x-2, y+4+wingOff, 8, 4, '#8844aa');
+        drawRect(x+18, y+4+wingOff, 8, 4, '#8844aa');
+        // Body
+        drawRect(x+6, y+2, 12, 14, '#6633aa');
+        // Eyes
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(x+8, y+6, 3, 3);
+        ctx.fillRect(x+14, y+6, 3, 3);
+        // Fangs
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(x+9, y+13, 2, 3);
+        ctx.fillRect(x+14, y+13, 2, 3);
+    } else if (type === 'spike') {
+        ctx.fillStyle = '#888';
+        ctx.beginPath();
+        ctx.moveTo(x, y+24);
+        ctx.lineTo(x+12, y);
+        ctx.lineTo(x+24, y+24);
+        ctx.fill();
+        ctx.fillStyle = '#aaa';
+        ctx.beginPath();
+        ctx.moveTo(x+4, y+24);
+        ctx.lineTo(x+12, y+4);
+        ctx.lineTo(x+20, y+24);
+        ctx.fill();
+    }
+}
+
+function drawCoin(cx, cy, frame) {
+    const x = Math.round(cx);
+    const y = Math.round(cy);
+    const bob = Math.sin(frame * 0.06) * 3;
+    const stretch = Math.abs(Math.cos(frame * 0.05));
+    const w = Math.max(2, Math.round(12 * stretch));
+    const offset = Math.round((12 - w) / 2);
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(x + offset + 2, y + bob, w, 14);
+    ctx.fillStyle = '#ffdd44';
+    ctx.fillRect(x + offset + 4, y + bob + 2, Math.max(1, w-4), 10);
+}
+
+function drawFlag(fx, fy, frame) {
+    const x = Math.round(fx);
+    const y = Math.round(fy);
+    // Pole
+    drawRect(x+12, y-40, 3, 72, '#ccc');
+    // Flag waving
+    const wave = Math.sin(frame * 0.04) * 3;
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(x+15, y-40);
+    ctx.lineTo(x+40+wave, y-32);
+    ctx.lineTo(x+15, y-20);
+    ctx.fill();
+    // Star on flag
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(x+22+wave*0.5, y-34, 4, 4);
+    // Base
+    drawRect(x+4, y+28, 20, 4, '#888');
+}
+
+function drawHeart(hx, hy, filled) {
+    const x = Math.round(hx);
+    const y = Math.round(hy);
+    ctx.fillStyle = filled ? '#ff4444' : '#442222';
+    // Simple pixel heart
+    ctx.fillRect(x+2, y, 4, 2);
+    ctx.fillRect(x+8, y, 4, 2);
+    ctx.fillRect(x, y+2, 14, 2);
+    ctx.fillRect(x, y+4, 14, 2);
+    ctx.fillRect(x+1, y+6, 12, 2);
+    ctx.fillRect(x+2, y+8, 10, 2);
+    ctx.fillRect(x+3, y+10, 8, 2);
+    ctx.fillRect(x+4, y+12, 6, 2);
+    ctx.fillRect(x+5, y+14, 4, 2);
+}
+
+// ---- Particle System ----
+class ParticleSystem {
+    constructor() { this.particles = []; }
+    emit(x, y, count, color, speed=2) {
+        for (let i = 0; i < count; i++) {
+            this.particles.push({
+                x, y,
+                vx: (Math.random()-0.5) * speed * 2,
+                vy: (Math.random()-1) * speed * 2,
+                life: 30 + Math.random()*20,
+                color,
+                size: 2 + Math.random()*3
+            });
+        }
+    }
+    update() {
+        for (let i = this.particles.length-1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.1;
+            p.life--;
+            if (p.life <= 0) this.particles.splice(i, 1);
+        }
+    }
+    draw() {
+        this.particles.forEach(p => {
+            ctx.globalAlpha = Math.min(1, p.life / 15);
+            drawRect(p.x, p.y, p.size, p.size, p.color);
+        });
+        ctx.globalAlpha = 1;
+    }
+}
+
+// ---- Level Definitions ----
+const TILE = 32;
+
+function createLevel(levelNum) {
+    // Each level is wider for scrolling. Returns { platforms, enemies, coins, flag, bg, startX, startY, width }
+    const levels = [];
+
+    // --- LEVEL 1: Green Hills ---
+    levels.push({
+        bg: { sky: '#87CEEB', far: '#5a8f3c', mid: '#4a7f2c', near: '#3a6f1c' },
+        startX: 50, startY: 300,
+        width: 2400,
+        platforms: [
+            // Ground
+            { x: 0, y: 448, w: 400, h: 52, color: '#5a8f3c', top: '#7ab83c' },
+            { x: 500, y: 448, w: 300, h: 52, color: '#5a8f3c', top: '#7ab83c' },
+            { x: 900, y: 448, w: 500, h: 52, color: '#5a8f3c', top: '#7ab83c' },
+            { x: 1500, y: 448, w: 300, h: 52, color: '#5a8f3c', top: '#7ab83c' },
+            { x: 1900, y: 448, w: 500, h: 52, color: '#5a8f3c', top: '#7ab83c' },
+            // Floating platforms
+            { x: 200, y: 350, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 380, y: 300, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 560, y: 280, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 750, y: 330, w: 128, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 1000, y: 350, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 1150, y: 280, w: 128, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 1350, y: 340, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 1700, y: 350, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 1850, y: 280, w: 96, h: 16, color: '#8B6914', top: '#A0822B' },
+            { x: 2050, y: 320, w: 128, h: 16, color: '#8B6914', top: '#A0822B' },
+        ],
+        enemies: [
+            { x: 550, y: 422, type: 'slime', patrol: 80 },
+            { x: 950, y: 422, type: 'slime', patrol: 100 },
+            { x: 1200, y: 250, type: 'bat', patrol: 120 },
+            { x: 1600, y: 422, type: 'slime', patrol: 60 },
+            { x: 2000, y: 422, type: 'slime', patrol: 80 },
+        ],
+        coins: [
+            { x: 230, y: 320 }, { x: 260, y: 320 },
+            { x: 410, y: 270 }, { x: 440, y: 270 },
+            { x: 590, y: 250 }, { x: 620, y: 250 },
+            { x: 780, y: 300 }, { x: 810, y: 300 }, { x: 840, y: 300 },
+            { x: 1030, y: 320 },
+            { x: 1180, y: 250 }, { x: 1210, y: 250 }, { x: 1240, y: 250 },
+            { x: 1550, y: 420 }, { x: 1580, y: 420 },
+            { x: 1880, y: 250 },
+            { x: 2080, y: 290 }, { x: 2110, y: 290 }, { x: 2140, y: 290 },
+        ],
+        flag: { x: 2280, y: 416 },
+        decorations: [
+            { type: 'tree', x: 100, y: 400 },
+            { type: 'tree', x: 700, y: 400 },
+            { type: 'bush', x: 300, y: 432 },
+            { type: 'tree', x: 1100, y: 400 },
+            { type: 'bush', x: 1700, y: 432 },
+            { type: 'tree', x: 2000, y: 400 },
+        ]
+    });
+
+    // --- LEVEL 2: Underground Caves ---
+    levels.push({
+        bg: { sky: '#1a1a2e', far: '#2a1a3e', mid: '#1a0a2e', near: '#0a0a1e' },
+        startX: 50, startY: 300,
+        width: 2800,
+        platforms: [
+            // Ground chunks
+            { x: 0, y: 448, w: 300, h: 52, color: '#555', top: '#777' },
+            { x: 400, y: 448, w: 200, h: 52, color: '#555', top: '#777' },
+            { x: 700, y: 448, w: 350, h: 52, color: '#555', top: '#777' },
+            { x: 1150, y: 448, w: 250, h: 52, color: '#555', top: '#777' },
+            { x: 1500, y: 448, w: 400, h: 52, color: '#555', top: '#777' },
+            { x: 2000, y: 448, w: 300, h: 52, color: '#555', top: '#777' },
+            { x: 2400, y: 448, w: 400, h: 52, color: '#555', top: '#777' },
+            // Floating platforms
+            { x: 150, y: 350, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 320, y: 300, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 500, y: 350, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 650, y: 280, w: 96, h: 16, color: '#666', top: '#888' },
+            { x: 850, y: 340, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 1000, y: 280, w: 96, h: 16, color: '#666', top: '#888' },
+            { x: 1100, y: 360, w: 64, h: 16, color: '#666', top: '#888' },
+            { x: 1250, y: 300, w: 96, h: 16, color: '#666', top: '#888' },
+            { x: 1450, y: 350, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 1650, y: 280, w: 128, h: 16, color: '#666', top: '#888' },
+            { x: 1850, y: 340, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 2050, y: 300, w: 96, h: 16, color: '#666', top: '#888' },
+            { x: 2250, y: 350, w: 80, h: 16, color: '#666', top: '#888' },
+            { x: 2450, y: 290, w: 128, h: 16, color: '#666', top: '#888' },
+        ],
+        enemies: [
+            { x: 450, y: 422, type: 'slime', patrol: 60 },
+            { x: 750, y: 422, type: 'slime', patrol: 100 },
+            { x: 400, y: 240, type: 'bat', patrol: 150 },
+            { x: 1000, y: 422, type: 'spike', patrol: 0 },
+            { x: 1200, y: 422, type: 'slime', patrol: 80 },
+            { x: 1050, y: 220, type: 'bat', patrol: 100 },
+            { x: 1600, y: 422, type: 'slime', patrol: 80 },
+            { x: 1700, y: 250, type: 'bat', patrol: 80 },
+            { x: 2100, y: 422, type: 'slime', patrol: 80 },
+            { x: 2300, y: 422, type: 'spike', patrol: 0 },
+        ],
+        coins: [
+            { x: 180, y: 320 }, { x: 350, y: 270 },
+            { x: 530, y: 320 }, { x: 680, y: 250 }, { x: 710, y: 250 },
+            { x: 880, y: 310 }, { x: 1030, y: 250 }, { x: 1060, y: 250 },
+            { x: 1280, y: 270 }, { x: 1310, y: 270 },
+            { x: 1480, y: 320 }, { x: 1510, y: 320 },
+            { x: 1680, y: 250 }, { x: 1710, y: 250 }, { x: 1740, y: 250 },
+            { x: 1880, y: 310 },
+            { x: 2080, y: 270 }, { x: 2110, y: 270 },
+            { x: 2480, y: 260 }, { x: 2510, y: 260 }, { x: 2540, y: 260 },
+        ],
+        flag: { x: 2650, y: 416 },
+        decorations: [
+            { type: 'crystal', x: 200, y: 430 },
+            { type: 'crystal', x: 800, y: 430 },
+            { type: 'crystal', x: 1300, y: 430 },
+            { type: 'crystal', x: 1800, y: 430 },
+            { type: 'crystal', x: 2200, y: 430 },
+        ]
+    });
+
+    // --- LEVEL 3: Sky Fortress ---
+    levels.push({
+        bg: { sky: '#ff9966', far: '#ff7744', mid: '#ee6633', near: '#cc5522' },
+        startX: 50, startY: 350,
+        width: 3200,
+        platforms: [
+            // Ground - sparse, mostly floating
+            { x: 0, y: 448, w: 200, h: 52, color: '#886644', top: '#aa8866' },
+            { x: 300, y: 400, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 500, y: 360, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 680, y: 320, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 880, y: 370, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 1050, y: 300, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 1250, y: 350, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 1400, y: 280, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 1300, y: 448, w: 200, h: 52, color: '#886644', top: '#aa8866' },
+            { x: 1600, y: 350, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 1780, y: 300, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 1950, y: 250, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 2100, y: 320, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 2300, y: 380, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 2300, y: 448, w: 200, h: 52, color: '#886644', top: '#aa8866' },
+            { x: 2500, y: 300, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 2700, y: 350, w: 96, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 2850, y: 280, w: 128, h: 16, color: '#886644', top: '#aa8866' },
+            { x: 2900, y: 448, w: 300, h: 52, color: '#886644', top: '#aa8866' },
+        ],
+        enemies: [
+            { x: 350, y: 374, type: 'slime', patrol: 60 },
+            { x: 600, y: 280, type: 'bat', patrol: 100 },
+            { x: 900, y: 344, type: 'slime', patrol: 40 },
+            { x: 1100, y: 240, type: 'bat', patrol: 120 },
+            { x: 1350, y: 422, type: 'slime', patrol: 80 },
+            { x: 1650, y: 300, type: 'bat', patrol: 100 },
+            { x: 1830, y: 274, type: 'slime', patrol: 60 },
+            { x: 2000, y: 200, type: 'bat', patrol: 80 },
+            { x: 2350, y: 354, type: 'slime', patrol: 40 },
+            { x: 2550, y: 274, type: 'slime', patrol: 60 },
+            { x: 2750, y: 280, type: 'bat', patrol: 120 },
+            { x: 2950, y: 422, type: 'slime', patrol: 80 },
+        ],
+        coins: [
+            { x: 330, y: 370 }, { x: 360, y: 370 },
+            { x: 530, y: 330 }, { x: 560, y: 330 },
+            { x: 710, y: 290 }, { x: 740, y: 290 },
+            { x: 1080, y: 270 }, { x: 1110, y: 270 }, { x: 1140, y: 270 },
+            { x: 1430, y: 250 }, { x: 1460, y: 250 },
+            { x: 1810, y: 270 }, { x: 1840, y: 270 },
+            { x: 1980, y: 220 }, { x: 2010, y: 220 },
+            { x: 2130, y: 290 }, { x: 2160, y: 290 }, { x: 2190, y: 290 },
+            { x: 2530, y: 270 }, { x: 2560, y: 270 },
+            { x: 2880, y: 250 }, { x: 2910, y: 250 }, { x: 2940, y: 250 },
+        ],
+        flag: { x: 3080, y: 416 },
+        decorations: [
+            { type: 'cloud', x: 100, y: 80 },
+            { type: 'cloud', x: 500, y: 60 },
+            { type: 'cloud', x: 900, y: 100 },
+            { type: 'cloud', x: 1400, y: 50 },
+            { type: 'cloud', x: 2000, y: 90 },
+            { type: 'cloud', x: 2600, y: 70 },
+        ]
+    });
+
+    return levels[Math.min(levelNum, levels.length - 1)];
+}
+
+// ---- Main Game Object ----
+const game = {
+    state: 'title', // title, playing, dead, win
+    level: 0,
+    totalLevels: 3,
+    score: 0,
+    lives: 3,
+    player: null,
+    camera: { x: 0, y: 0 },
+    levelData: null,
+    enemies: [],
+    coins: [],
+    particles: new ParticleSystem(),
+    frame: 0,
+    deathTimer: 0,
+    winTimer: 0,
+    jumpHeld: false,
+    jumpBufferTimer: 0,
+    coyoteTimer: 0,
+
+    init() {
+        this.showTitle();
+        this.loop();
+    },
+
+    showTitle() {
+        this.state = 'title';
+        document.getElementById('title-screen').style.display = 'block';
+        document.getElementById('game-over-screen').style.display = 'none';
+        document.getElementById('win-screen').style.display = 'none';
+    },
+
+    start() {
+        audioCtx.resume();
+        this.state = 'playing';
+        this.level = 0;
+        this.score = 0;
+        this.lives = 3;
+        document.getElementById('title-screen').style.display = 'none';
+        document.getElementById('game-over-screen').style.display = 'none';
+        document.getElementById('win-screen').style.display = 'none';
+        this.loadLevel(this.level);
+    },
+
+    loadLevel(n) {
+        this.levelData = createLevel(n);
+        const ld = this.levelData;
+        this.player = {
+            x: ld.startX, y: ld.startY,
+            vx: 0, vy: 0,
+            w: 24, h: 30,
+            dir: 1,
+            grounded: false,
+            frame: 0,
+            dead: false,
+            invincible: 0,
+        };
+        this.enemies = ld.enemies.map(e => ({
+            ...e,
+            startX: e.x,
+            w: 24, h: 24,
+            alive: true,
+            dir: 1,
+        }));
+        this.coins = ld.coins.map(c => ({ ...c, collected: false }));
+        this.camera = { x: 0, y: 0 };
+        this.particles = new ParticleSystem();
+        this.deathTimer = 0;
+        this.winTimer = 0;
+        this.jumpHeld = false;
+        this.jumpBufferTimer = 0;
+        this.coyoteTimer = 0;
+    },
+
+    die() {
+        if (this.player.dead || this.player.invincible > 0) return;
+        this.lives--;
+        sfxHurt();
+        this.particles.emit(this.player.x+12, this.player.y+12, 15, '#ff4444', 3);
+        if (this.lives <= 0) {
+            this.player.dead = true;
+            this.deathTimer = 90;
+        } else {
+            this.player.invincible = 90;
+            this.player.vy = -8;
+        }
+    },
+
+    nextLevel() {
+        this.level++;
+        if (this.level >= this.totalLevels) {
+            this.state = 'win';
+            document.getElementById('win-score').textContent = `Final Score: ${this.score}`;
+            document.getElementById('win-screen').style.display = 'block';
+            sfxWin();
+        } else {
+            this.loadLevel(this.level);
+        }
+    },
+
+    update() {
+        if (this.state !== 'playing') return;
+
+        const p = this.player;
+        const ld = this.levelData;
+        this.frame++;
+
+        // Death timer
+        if (p.dead) {
+            this.deathTimer--;
+            p.vy += 0.3;
+            p.y += p.vy;
+            if (this.deathTimer <= 0) {
+                this.state = 'dead';
+                document.getElementById('go-score').textContent = `Score: ${this.score}`;
+                document.getElementById('game-over-screen').style.display = 'block';
+            }
+            return;
+        }
+
+        // Win animation
+        if (this.winTimer > 0) {
+            this.winTimer--;
+            if (this.winTimer <= 0) {
+                this.nextLevel();
+            }
+            this.particles.update();
+            return;
+        }
+
+        // Invincibility
+        if (p.invincible > 0) p.invincible--;
+
+        // Horizontal movement
+        const accel = 0.6;
+        const friction = 0.82;
+        const maxSpeed = 5;
+
+        if (isLeft()) { p.vx -= accel; p.dir = -1; }
+        if (isRight()) { p.vx += accel; p.dir = 1; }
+        p.vx *= friction;
+        if (Math.abs(p.vx) < 0.1) p.vx = 0;
+        if (p.vx > maxSpeed) p.vx = maxSpeed;
+        if (p.vx < -maxSpeed) p.vx = -maxSpeed;
+
+        // Gravity
+        const gravity = 0.5;
+        const maxFall = 10;
+        p.vy += gravity;
+        if (p.vy > maxFall) p.vy = maxFall;
+
+        // Jump buffering & coyote time
+        if (isJump() && !this.jumpHeld) {
+            this.jumpBufferTimer = 8;
+        }
+        this.jumpHeld = isJump();
+        if (this.jumpBufferTimer > 0) this.jumpBufferTimer--;
+        if (p.grounded) this.coyoteTimer = 6;
+        else this.coyoteTimer--;
+
+        // Jump
+        if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0) {
+            p.vy = -10.5;
+            p.grounded = false;
+            this.jumpBufferTimer = 0;
+            this.coyoteTimer = 0;
+            sfxJump();
+            this.particles.emit(p.x+12, p.y+p.h, 5, '#aaa', 1.5);
+        }
+
+        // Variable jump height
+        if (!isJump() && p.vy < -3) {
+            p.vy = -3;
+        }
+
+        // Walking frame
+        if (p.grounded && Math.abs(p.vx) > 0.5) {
+            p.frame++;
+        }
+
+        // Move X & collide
+        p.x += p.vx;
+        for (const plat of ld.platforms) {
+            if (this.boxCollide(p, plat)) {
+                if (p.vx > 0) p.x = plat.x - p.w;
+                else if (p.vx < 0) p.x = plat.x + plat.w;
+                p.vx = 0;
+            }
+        }
+
+        // Move Y & collide
+        p.grounded = false;
+        p.y += p.vy;
+        for (const plat of ld.platforms) {
+            if (this.boxCollide(p, plat)) {
+                if (p.vy > 0) {
+                    p.y = plat.y - p.h;
+                    p.grounded = true;
+                } else if (p.vy < 0) {
+                    p.y = plat.y + plat.h;
+                }
+                p.vy = 0;
+            }
+        }
+
+        // Fall off screen
+        if (p.y > BASE_H + 50) {
+            this.die();
+            if (!p.dead) {
+                // Respawn at start if still alive
+                p.x = ld.startX;
+                p.y = ld.startY;
+                p.vx = 0;
+                p.vy = 0;
+            }
+        }
+
+        // Keep in bounds (left)
+        if (p.x < 0) { p.x = 0; p.vx = 0; }
+
+        // Enemy updates
+        for (const e of this.enemies) {
+            if (!e.alive) continue;
+
+            if (e.type === 'spike') continue; // static
+
+            // Patrol
+            if (e.patrol > 0) {
+                e.x += e.dir * (e.type === 'bat' ? 1.5 : 1);
+                if (Math.abs(e.x - e.startX) > e.patrol) e.dir *= -1;
+            }
+
+            // Collision with player
+            if (p.invincible <= 0 && this.boxCollide(p, { x: e.x, y: e.y, w: e.w, h: e.h })) {
+                // Stomping (player falling onto enemy)
+                if (p.vy > 0 && p.y + p.h - p.vy <= e.y + 8 && e.type !== 'spike') {
+                    e.alive = false;
+                    p.vy = -8;
+                    this.score += 100;
+                    sfxStomp();
+                    this.particles.emit(e.x+12, e.y+12, 10, e.type === 'bat' ? '#8844aa' : '#44cc44', 2);
+                } else {
+                    this.die();
+                }
+            }
+        }
+
+        // Coin collection
+        for (const c of this.coins) {
+            if (c.collected) continue;
+            const coinBox = { x: c.x, y: c.y, w: 16, h: 16 };
+            if (this.boxCollide(p, coinBox)) {
+                c.collected = true;
+                this.score += 50;
+                sfxCoin();
+                this.particles.emit(c.x+8, c.y+8, 8, '#ffcc00', 2);
+            }
+        }
+
+        // Flag (level complete)
+        const flag = ld.flag;
+        if (this.boxCollide(p, { x: flag.x, y: flag.y - 40, w: 32, h: 72 })) {
+            this.winTimer = 60;
+            this.score += 500;
+            sfxWin();
+            this.particles.emit(flag.x+16, flag.y, 20, '#ff4444', 3);
+            this.particles.emit(flag.x+16, flag.y, 20, '#ffcc00', 3);
+        }
+
+        // Camera
+        const targetCamX = p.x - BASE_W / 2 + p.w / 2;
+        this.camera.x += (targetCamX - this.camera.x) * 0.1;
+        if (this.camera.x < 0) this.camera.x = 0;
+        if (this.camera.x > ld.width - BASE_W) this.camera.x = ld.width - BASE_W;
+
+        this.particles.update();
+    },
+
+    boxCollide(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    },
+
+    draw() {
+        const ld = this.levelData;
+
+        if (this.state === 'title' || !ld) {
+            // Title background
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, BASE_W, BASE_H);
+            // Animated stars
+            for (let i = 0; i < 50; i++) {
+                const sx = (i * 137 + this.frame * 0.2) % BASE_W;
+                const sy = (i * 97) % BASE_H;
+                const brightness = Math.sin(this.frame * 0.03 + i) * 0.5 + 0.5;
+                ctx.fillStyle = `rgba(255,255,255,${brightness * 0.8})`;
+                ctx.fillRect(sx, sy, 2, 2);
+            }
+            return;
+        }
+
+        const cx = this.camera.x;
+        const p = this.player;
+
+        // Sky
+        ctx.fillStyle = ld.bg.sky;
+        ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+        // Parallax mountains/hills
+        this.drawParallax(cx, ld);
+
+        // Decorations (behind platforms)
+        for (const d of ld.decorations || []) {
+            const dx = d.x - cx;
+            if (dx < -100 || dx > BASE_W + 100) continue;
+            this.drawDecoration(d, dx);
+        }
+
+        // Platforms
+        for (const plat of ld.platforms) {
+            const px = plat.x - cx;
+            if (px + plat.w < -10 || px > BASE_W + 10) continue;
+            // Platform body
+            drawRect(px, plat.y, plat.w, plat.h, plat.color);
+            // Top grass/surface
+            drawRect(px, plat.y, plat.w, 4, plat.top);
+            // Edge detail
+            if (plat.h > 20) {
+                for (let i = 0; i < plat.w; i += 16) {
+                    ctx.fillStyle = 'rgba(0,0,0,0.1)';
+                    ctx.fillRect(px + i, plat.y + 4, 8, plat.h - 4);
+                }
+            }
+        }
+
+        // Coins
+        for (const c of this.coins) {
+            if (c.collected) continue;
+            drawCoin(c.x - cx, c.y, this.frame);
+        }
+
+        // Flag
+        drawFlag(ld.flag.x - cx, ld.flag.y, this.frame);
+
+        // Enemies
+        for (const e of this.enemies) {
+            if (!e.alive) continue;
+            drawEnemy(e.x - cx, e.y, e.type, this.frame);
+        }
+
+        // Player
+        if (p.invincible <= 0 || Math.floor(this.frame / 3) % 2 === 0) {
+            drawPlayer(p.x - cx, p.y, p.dir, p.frame, p.dead);
+        }
+
+        // Particles
+        ctx.save();
+        ctx.translate(-cx, 0);
+        this.particles.draw();
+        ctx.restore();
+
+        // HUD
+        this.drawHUD();
+    },
+
+    drawParallax(cx, ld) {
+        // Far layer
+        ctx.fillStyle = ld.bg.far;
+        for (let i = 0; i < 8; i++) {
+            const bx = i * 200 - (cx * 0.2) % 200;
+            const bh = 60 + Math.sin(i * 1.5) * 30;
+            ctx.beginPath();
+            ctx.moveTo(bx, BASE_H);
+            ctx.lineTo(bx + 50, BASE_H - bh - 30);
+            ctx.lineTo(bx + 100, BASE_H - bh);
+            ctx.lineTo(bx + 150, BASE_H - bh - 20);
+            ctx.lineTo(bx + 200, BASE_H);
+            ctx.fill();
+        }
+        // Mid layer
+        ctx.fillStyle = ld.bg.mid;
+        for (let i = 0; i < 8; i++) {
+            const bx = i * 180 - (cx * 0.4) % 180;
+            const bh = 40 + Math.sin(i * 2.1 + 1) * 20;
+            ctx.beginPath();
+            ctx.moveTo(bx, BASE_H);
+            ctx.lineTo(bx + 40, BASE_H - bh);
+            ctx.lineTo(bx + 90, BASE_H - bh - 15);
+            ctx.lineTo(bx + 140, BASE_H - bh + 5);
+            ctx.lineTo(bx + 180, BASE_H);
+            ctx.fill();
+        }
+    },
+
+    drawDecoration(d, dx) {
+        if (d.type === 'tree') {
+            // Trunk
+            drawRect(dx+10, d.y-40, 12, 48, '#664422');
+            // Foliage
+            ctx.fillStyle = '#338822';
+            ctx.beginPath();
+            ctx.moveTo(dx-5, d.y-30);
+            ctx.lineTo(dx+16, d.y-80);
+            ctx.lineTo(dx+37, d.y-30);
+            ctx.fill();
+            ctx.fillStyle = '#2a7718';
+            ctx.beginPath();
+            ctx.moveTo(dx, d.y-50);
+            ctx.lineTo(dx+16, d.y-90);
+            ctx.lineTo(dx+32, d.y-50);
+            ctx.fill();
+        } else if (d.type === 'bush') {
+            ctx.fillStyle = '#338822';
+            ctx.beginPath();
+            ctx.arc(dx+12, d.y, 14, Math.PI, 0);
+            ctx.arc(dx+28, d.y, 12, Math.PI, 0);
+            ctx.arc(dx+20, d.y-4, 16, Math.PI, 0);
+            ctx.fill();
+        } else if (d.type === 'crystal') {
+            const glow = Math.sin(this.frame * 0.05) * 0.3 + 0.7;
+            ctx.fillStyle = `rgba(100, 200, 255, ${glow})`;
+            ctx.beginPath();
+            ctx.moveTo(dx, d.y);
+            ctx.lineTo(dx+8, d.y-20);
+            ctx.lineTo(dx+16, d.y);
+            ctx.fill();
+            ctx.fillStyle = `rgba(150, 230, 255, ${glow * 0.7})`;
+            ctx.beginPath();
+            ctx.moveTo(dx+2, d.y);
+            ctx.lineTo(dx+8, d.y-16);
+            ctx.lineTo(dx+14, d.y);
+            ctx.fill();
+        } else if (d.type === 'cloud') {
+            ctx.fillStyle = 'rgba(255,255,255,0.4)';
+            const cloudX = dx - (this.camera.x * 0.05) % 100;
+            ctx.beginPath();
+            ctx.arc(cloudX, d.y, 20, 0, Math.PI*2);
+            ctx.arc(cloudX+25, d.y-5, 25, 0, Math.PI*2);
+            ctx.arc(cloudX+50, d.y, 20, 0, Math.PI*2);
+            ctx.arc(cloudX+20, d.y+5, 18, 0, Math.PI*2);
+            ctx.fill();
+        }
+    },
+
+    drawHUD() {
+        // Hearts
+        for (let i = 0; i < 3; i++) {
+            drawHeart(10 + i * 22, 10, i < this.lives);
+        }
+
+        // Score
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 16px Courier New';
+        ctx.textAlign = 'left';
+        ctx.fillText(`SCORE: ${this.score}`, 10, 46);
+
+        // Level
+        ctx.textAlign = 'right';
+        ctx.fillText(`LEVEL ${this.level + 1}/${this.totalLevels}`, BASE_W - 10, 24);
+
+        // Coins remaining
+        const coinsLeft = this.coins.filter(c => !c.collected).length;
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText(`COINS: ${this.coins.length - coinsLeft}/${this.coins.length}`, BASE_W - 10, 46);
+
+        ctx.textAlign = 'left';
+    },
+
+    loop() {
+        this.update();
+        this.draw();
+        requestAnimationFrame(() => this.loop());
+    }
+};
+
+// Start!
+game.init();
+</script>
+</body>
+</html>
