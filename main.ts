@@ -1,5 +1,4 @@
 input.onButtonPressed(Button.A, function () {
-    basic.showString("LOADING")
     while (!(input.logoIsPressed())) {
         basic.showLeds(`
             # # # # #
